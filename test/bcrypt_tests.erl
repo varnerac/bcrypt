@@ -89,7 +89,11 @@ start_with(Mechanism) when Mechanism =:= nif; Mechanism =:= port ->
         {error, {already_loaded, bcrypt}} -> ok;
         ok -> ok
     end,
-    ok = application:set_env(bcrypt, mechanism, Mechanism),
+    Env = case Mechanism of
+        port ->[{mechanism, port}, {pool_size, 1}];
+        nif -> [{mechanism, nif}, {nif_pool_size, 1}, {nif_pool_max_overflow, 1}]
+    end,
+    ok = application:set_env([{bcrypt, Env}]),
     case application:start(bcrypt) of
         {error, {already_started, bcrypt}} ->
             ok = application:stop(bcrypt),
@@ -116,6 +120,21 @@ pair_nif_test_() ->
         || {Pass, Salt, Hash} <- ?PAIRS
      ]}.
 
+workers_available_nif_test_() ->
+    {setup, fun() -> ok = start_with(nif) end,
+     [{timeout, 5000,
+       fun() ->
+               ?assert(bcrypt:workers_available()),
+               {ok, BigSalt} = bcrypt:gen_salt(15),
+               {ok, Salt} = bcrypt:gen_salt(),
+               spawn(bcrypt, hashpw, ["foo", BigSalt]),
+               bcrypt:hashpw("foo", Salt),
+               ?assert(bcrypt:workers_available()),
+               spawn(bcrypt, hashpw, ["foo", BigSalt]),
+               bcrypt:hashpw("foo", Salt),
+               ?assertNot(bcrypt:workers_available())
+       end}]}.
+
 simple_port_test_() ->
     {setup, fun() -> ok = start_with(port) end,
      [{timeout, 1000,
@@ -134,3 +153,16 @@ pair_port_test_() ->
         end
         || {Pass, Salt, Hash} <- ?PAIRS
      ]}.
+
+workers_available_port_test_() ->
+    {setup, fun() -> ok = start_with(port) end,
+     [{timeout, 5000,
+        fun() ->
+                ?assert(bcrypt:workers_available()),
+                {ok, BigSalt} = bcrypt:gen_salt(15),
+                {ok, Salt} = bcrypt:gen_salt(),
+                spawn(bcrypt, hashpw, ["foo", BigSalt]),
+                bcrypt:hashpw("foo", Salt),
+                ?assertNot(bcrypt:workers_available())
+        end}]}.
+
