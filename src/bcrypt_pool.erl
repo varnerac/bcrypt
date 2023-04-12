@@ -8,8 +8,9 @@
 -behaviour(gen_server).
 
 -export([start_link/0, available/1]).
--export([gen_salt/0, gen_salt/1]).
--export([hashpw/2]).
+-export([gen_salt/0, gen_salt/1, gen_salt/2]).
+-export([hashpw/2, hashpw/3]).
+-export([workers_available/0]).
 
 %% gen_server
 -export([init/1, code_change/3, terminate/2,
@@ -34,19 +35,26 @@
 	Error :: {already_started,Pid} | term().
 start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% @doc Asynchronosly check if `Pid' in `#state:requests' queue or not.
+%% @doc Asynchronously check if `Pid' in `#state:requests' queue or not.
 
 -spec available(Pid) -> Result when
 	Pid :: pid(),
 	Result :: ok.
 available(Pid) -> gen_server:cast(?MODULE, {available, Pid}).
 
+
+%% @doc Check if any workers are available.
+
+-spec workers_available() -> Result when
+	Result :: boolean().
+workers_available() -> gen_server:call(?MODULE, workers_available, infinity).
+
 %% @doc Generate a random text salt.
 
 -spec gen_salt() -> Result when
 	Result :: {ok, Salt},
 	Salt :: [byte()].
-gen_salt()             -> do_call(fun bcrypt_port:gen_salt/1, []).
+gen_salt() -> do_call(fun bcrypt_port:gen_salt/1, [], infinity).
 
 %% @doc Generate a random text salt. Rounds defines the complexity of 
 %% the hashing, increasing the cost as 2^log_rounds.
@@ -55,11 +63,23 @@ gen_salt()             -> do_call(fun bcrypt_port:gen_salt/1, []).
 	Rounds :: bcrypt:rounds(),
 	Result :: {ok, Salt},
 	Salt :: [byte()].
-gen_salt(Rounds)       -> do_call(fun bcrypt_port:gen_salt/2, [Rounds]).
+gen_salt(Rounds)       -> gen_salt(Rounds, infinity).
+
+%% @doc Generate a random text salt. Rounds defines the complexity of 
+%% the hashing, increasing the cost as 2^log_rounds.
+
+-spec gen_salt(Rounds, Timeout) -> Result when
+	Rounds :: bcrypt:rounds(),
+    Timeout :: timeout(),
+	Result :: {ok, Salt},
+	Salt :: [byte()].
+gen_salt(Rounds, Timeout)       -> do_call(fun bcrypt_port:gen_salt/2, [Rounds], Timeout).
 
 %% @doc Hash the specified password and the salt.
 
-hashpw(Password, Salt) -> do_call(fun bcrypt_port:hashpw/3, [Password, Salt]).
+hashpw(Password, Salt) -> hashpw(Password, Salt, infinity).
+
+hashpw(Password, Salt, Timeout) ->  do_call(fun bcrypt_port:hashpw/3, [Password, Salt], Timeout).
 
 %% @private
 
@@ -77,8 +97,7 @@ terminate(shutdown, _) -> ok.
 
 -spec handle_call(Request, From, State) -> Result when 
 	Request :: request,
-    From :: {RPid, atom()},
-	RPid :: pid(),
+    From :: {pid(), gen_server:reply_tag()},
 	State :: state(),
 	Result :: {noreply, state()} | {reply, {ok, pid()}, state()}.
 handle_call(request, {RPid, _} = From, #state{ports = P} = State) ->
@@ -100,6 +119,8 @@ handle_call(request, {RPid, _} = From, #state{ports = P} = State) ->
             #state{busy = B} = State,
             {reply, {ok, PPid}, State#state{busy = B + 1, ports = P1}}
     end;
+handle_call(workers_available, _From, #state{size = Size, busy = Busy} = State) ->
+    {reply, Size > Busy, State};
 handle_call(Msg, _, _) -> exit({unknown_call, Msg}).
 
 %% @private
@@ -134,7 +155,7 @@ handle_info(Msg, _) -> exit({unknown_info, Msg}).
 
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
-do_call(F, Args0) ->
-    {ok, Pid} = gen_server:call(?MODULE, request, infinity),
+do_call(F, Args0, Timeout) ->
+    {ok, Pid} = gen_server:call(?MODULE, request, Timeout),
     Args = [Pid|Args0],
     apply(F, Args).

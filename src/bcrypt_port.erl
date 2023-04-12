@@ -10,7 +10,7 @@
 %% API
 -export([start_link/0, stop/0]).
 -export([gen_salt/1, gen_salt/2]).
--export([hashpw/3]).
+-export([hashpw/3, hashpw/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -78,8 +78,16 @@ gen_salt(Pid, LogRounds) ->
 	Salt :: [byte()],
 	Result :: [byte()].
 hashpw(Pid, Password, Salt) ->
-    gen_server:call(Pid, {hashpw, Password, Salt}, infinity).
+    hashpw(Pid, Password, Salt, infinity) .
 
+-spec hashpw(Pid, Password, Salt, Timeout) -> Result when
+    Pid :: pid(),
+    Password :: [byte()],
+    Salt :: [byte()],
+    Timeout :: timeout(),
+    Result :: [byte()].
+    hashpw(Pid, Password, Salt, Timeout) ->
+        gen_server:call(Pid, {hashpw, Password, Salt}, Timeout).
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================

@@ -8,8 +8,9 @@
 -behaviour(gen_server).
 
 -export([start_link/1]).
--export([gen_salt/0, gen_salt/1]).
--export([hashpw/2]).
+-export([gen_salt/0, gen_salt/1, gen_salt/2]).
+-export([hashpw/2, hashpw/3]).
+-export([workers_available/0]).
 
 %% gen_server
 -export([init/1, code_change/3, terminate/2,
@@ -40,14 +41,29 @@ gen_salt() ->
         gen_server:call(Worker, gen_salt, infinity)
     end).
 
+-spec workers_available() -> Result when
+	Result :: boolean().
+workers_available() ->
+	{StateName, _Workers, _Overflow, _Size} = poolboy:status(bcrypt_nif_pool),
+	StateName =/= full.
+	
 %% @doc Returns bcrypt salt.
 
 -spec gen_salt(Rounds) -> Result when
 	Rounds :: bcrypt:rounds(),
 	Result :: [byte()].
 gen_salt(Rounds) ->
+    gen_salt(Rounds, infinity).
+
+%% @doc Returns bcrypt salt.
+
+-spec gen_salt(Rounds, Timeout) -> Result when
+	Rounds :: bcrypt:rounds(),
+	Timeout :: timeout(),
+	Result :: [byte()].
+gen_salt(Rounds, Timeout) ->
     poolboy:transaction(bcrypt_nif_pool, fun(Worker) ->
-        gen_server:call(Worker, {gen_salt, Rounds}, infinity)
+        gen_server:call(Worker, {gen_salt, Rounds}, Timeout)
     end).
 
 %% @doc Make hash string based on `Password' and `Salt'.
@@ -59,8 +75,24 @@ gen_salt(Rounds) ->
 	Hash :: [byte()],
 	ErrorDescription :: bcrypt:pwerr().
 hashpw(Password, Salt) ->
+	hashpw(Password, Salt, infinity).
+
+
+%% @doc Make hash string based on `Password' and `Salt'.
+
+-spec hashpw( Password, Salt, Timeout ) -> Result when
+	Password :: [byte()] | binary(), 
+	Salt :: [byte()] | binary(),
+	Timeout :: timeout(),
+	Result :: {ok, Hash} | {error, ErrorDescription},
+	Hash :: [byte()],
+	ErrorDescription :: bcrypt:pwerr().
+hashpw(Password, Salt, Timeout) ->
     poolboy:transaction(bcrypt_nif_pool, fun(Worker) ->
-         gen_server:call(Worker, {hashpw, Password, Salt}, infinity)
+         case gen_server:call(Worker, {hashpw, Password, Salt}, Timeout) of
+			{timeout, _} -> {error, timeout};
+			Result -> Result
+		 end
     end).
 
 %% @private
@@ -82,14 +114,14 @@ terminate(shutdown, _) -> ok.
 
 -spec handle_call(Request, From, State) -> Result when 
     Request :: gen_salt,
-    From :: {pid(), atom()},
+    From :: {pid(), gen_server:reply_tag()},
     State :: state(),
 	Result :: {reply, Reply, State},
 	Reply :: {ok, Salt},
 	Salt :: integer();
 (Request, From, State) -> Result when
 	Request :: {gen_salt, Rounds},
-	From :: {pid(), atom()},
+	From :: {pid(), gen_server:reply_tag()},
 	State :: state(),
 	Rounds :: bcrypt:rounds(),
 	Result :: {reply, Reply, State},
@@ -97,7 +129,7 @@ terminate(shutdown, _) -> ok.
 	Salt :: integer();
 (Request, From, State) -> Result when
 	Request :: {hashpw, Password, Salt},
-	From :: {pid(), atom()},
+	From :: {pid(), gen_server:reply_tag()},
 	State :: state(),
 	Password :: [byte()],
 	Salt :: integer(),
